@@ -7,8 +7,11 @@ from typing import Any
 # ddgs paketi zaman zaman ağ hataları fırlatabilir; çağıran taraf yakalar.
 try:  # pragma: no cover - import ortamlara göre farklılık gösterebilir
     from ddgs import DDGS
-except ImportError:  # eski paket adı
-    from duckduckgo_search import DDGS  # type: ignore
+except ImportError:
+    try:
+        from duckduckgo_search import DDGS  # type: ignore
+    except ImportError:
+        DDGS = None  # type: ignore
 
 
 def web_search(query: str, max_results: int = 5) -> str:
@@ -22,6 +25,9 @@ def web_search(query: str, max_results: int = 5) -> str:
         Başlık, bağlantı ve özet içeren biçimlendirilmiş metin. Sonuç yoksa
         bunu belirten bir mesaj döner.
     """
+    if DDGS is None:
+        return "Web arama modülü (ddgs) kurulu değil. Kurmak için: pip install ddgs"
+
     query = (query or "").strip()
     if not query:
         return "Arama sorgusu boş olamaz."

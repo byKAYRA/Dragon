@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import tempfile
 import threading
+import time
+import uuid
 from pathlib import Path
 from typing import Callable
 
@@ -38,23 +41,94 @@ class VoiceError(Exception):
     """Kullanıcıya gösterilebilir ses motoru hatası."""
 
 
+def clean_text_for_speech(text: str) -> str:
+    """Metni sesli okuma (TTS) için optimize eder ve temizler.
+
+    Markdown biçimlendirmelerini, kod bloklarını, linkleri, emojileri ve
+    aşırı uzun metinleri ayıklayarak kulağa doğal gelen Türkçe konuşma metni üretir.
+    """
+    if not text:
+        return ""
+
+    # 1. Kod bloklarını temizle veya konuşma dostu ifadeye çevir
+    cleaned = re.sub(
+        r"```[^\n`]*\n.*?```",
+        " İlgili kod bloğunu ekrana yansıttım efendim. ",
+        text,
+        flags=re.DOTALL,
+    )
+
+    # 2. Satır içi kodlar: `komut` -> komut
+    cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
+
+    # 3. Web bağlantıları
+    cleaned = re.sub(r"https?://\S+", "bağlantı adresi", cleaned)
+
+    # 4. Markdown başlıkları (# Başlık -> Başlık)
+    cleaned = re.sub(r"^\s*#+\s*", "", cleaned, flags=re.MULTILINE)
+
+    # 5. Kalın, italik ve üstü çizili (*, **, _, __, ~~)
+    cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"\*([^*]+)\*", r"\1", cleaned)
+    cleaned = re.sub(r"__([^_]+)__", r"\1", cleaned)
+    cleaned = re.sub(r"_([^_]+)_", r"\1", cleaned)
+    cleaned = re.sub(r"~~([^~]+)~~", r"\1", cleaned)
+
+    # 6. Liste imleri (- madde, * madde, 1. madde)
+    cleaned = re.sub(r"^\s*[-*•]\s+", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"^\s*\d+\.\s+", "", cleaned, flags=re.MULTILINE)
+
+    # 7. Tablo dikey çizgileri
+    cleaned = cleaned.replace("|", " ")
+
+    # 8. Emojileri temizle
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"
+        "\U0001F300-\U0001F5FF"
+        "\U0001F680-\U0001F6FF"
+        "\U0001F1E0-\U0001F1FF"
+        "\U00002702-\U000027B0"
+        "\U000024C2-\U0001F251"
+        "\U0001F900-\U0001F9FF"
+        "\U0001FA70-\U0001FAFF"
+        "]+",
+        flags=re.UNICODE,
+    )
+    cleaned = emoji_pattern.sub("", cleaned)
+
+    # 9. Fazla boşlukları ve satır sonlarını temizle
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    # 10. Çok uzun yanıtları konuşma için sınırla (ilk 600 karakter civarı)
+    if len(cleaned) > 600:
+        cutoff = cleaned[:600]
+        last_punct = max(cutoff.rfind("."), cutoff.rfind("!"), cutoff.rfind("?"))
+        if last_punct > 250:
+            cleaned = cutoff[: last_punct + 1] + " Devamını ekrandan okuyabilirsiniz efendim."
+        else:
+            cleaned = cutoff + "… Devamını ekrandan okuyabilirsiniz efendim."
+
+    return cleaned
+
+
 class VoiceEngine:
     """Mikrofondan dinler ve metni sesli okur."""
 
     def __init__(
         self,
         language: str = "tr-TR",
-        tts_backend: str = "google",
+        tts_backend: str = "edge",
         google_tts_key: str = "",
-        google_tts_voice: str = "tr-TR-Chirp3-HD-Charon",
-        tts_speaking_rate: float = 0.92,
-        google_tts_pitch: float = -3.0,
-        tts_voice: str = "tr-TR-AhmetNeural",
-        tts_rate: str = "-8%",
-        tts_pitch: str = "-15Hz",
+        google_tts_voice: str = "tr-TR-Neural2-C",
+        tts_speaking_rate: float = 1.0,
+        google_tts_pitch: float = 0.0,
+        tts_voice: str = "tr-TR-EmelNeural",
+        tts_rate: str = "+0%",
+        tts_pitch: str = "+0Hz",
     ) -> None:
         self.language = language
-        # TTS arka ucu: "google" (Google Cloud TTS, doğal) veya "edge" (hızlı yedek).
+        # TTS arka ucu: "edge" (ücretsiz, doğal Türkçe sesler) veya "google" (Google Cloud TTS).
         self.tts_backend = tts_backend
         self.google_tts_key = google_tts_key
         self.google_tts_voice = google_tts_voice
@@ -89,7 +163,6 @@ class VoiceEngine:
             )
 
         recognizer = sr.Recognizer()
-        # Daha hassas ve hızlı algılama ayarları (diğer projeden uyarlanmış)
         recognizer.energy_threshold = 280
         recognizer.dynamic_energy_threshold = True
         recognizer.pause_threshold = 0.32
@@ -156,12 +229,19 @@ class VoiceEngine:
         ).start()
 
     def _speak_job(self, text: str, **callbacks) -> None:
+        cleaned_text = clean_text_for_speech(text)
+        if not cleaned_text:
+            done = callbacks.get("on_done")
+            if done is not None:
+                done()
+            return
+
         path: Path | None = None
         try:
             on_start = callbacks.get("on_start")
             if on_start is not None:
                 on_start()
-            path = self._make_audio(text, on_status=callbacks.get("on_status"))
+            path = self._make_audio(cleaned_text, on_status=callbacks.get("on_status"))
             if path is not None:
                 self._play_audio(path)
             done = callbacks.get("on_done")
@@ -173,6 +253,7 @@ class VoiceEngine:
                 err(exc)
         finally:
             if path is not None:
+                time.sleep(0.05)
                 try:
                     path.unlink(missing_ok=True)
                 except OSError:
@@ -183,12 +264,9 @@ class VoiceEngine:
         text: str,
         on_status: Callable[[str], None] | None = None,
     ) -> Path | None:
-        """Konuşma sesini üretir: Google tercih, Edge yedek.
-
-        Google anahtarı varsa önce Google Cloud TTS denenir; herhangi bir
-        hata/eksiklik durumunda sessizce Edge (hızlı yedek) kullanılır.
-        """
-        if self.tts_backend == "google" and self.google_tts_key:
+        """Konuşma sesini üretir: Google (anahtar varsa), Edge (doğal Türkçe), SAPI5 (çevrimdışı)."""
+        # 1. Google Cloud TTS (eğer google seçili ve api_key tanımlıysa)
+        if self.tts_backend == "google" and bool(self.google_tts_key and self.google_tts_key.strip()):
             tmp = _temp_audio(".wav", prefix="dragon_google_")
             try:
                 if on_status is not None:
@@ -203,43 +281,49 @@ class VoiceEngine:
                     speaking_rate=self.tts_speaking_rate,
                     pitch=self.google_tts_pitch,
                 )
-                return tmp
-            except Exception:  # anahtar/ağ/model sorunu -> SAPI5 yedeğe düş
+                if tmp.exists() and tmp.stat().st_size > 0:
+                    return tmp
+            except Exception:  # anahtar/ağ/model sorunu -> Edge yedeğe geç
                 try:
                     tmp.unlink(missing_ok=True)
                 except OSError:
                     pass
 
-        # Yedek 1: SAPI5 (çevrimdışı, Windows yerleşik ses - yalnızca Türkçe ses varsa)
-        try:
-            import win32com.client
-            _spk = win32com.client.Dispatch("SAPI.SpVoice")
-            if self._pick_turkish_sapi_voice(_spk) is not None:
-                if on_status is not None:
-                    on_status("SAPI5 sesi oluşturuluyor…")
-                tmp = _temp_audio(".wav", prefix="dragon_sapi5_")
-                if self._sapi5_synthesize(text, tmp):
-                    return tmp
-                tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-        # Yedek 2: Edge (hızlı, internet gerektirir)
+        # 2. Edge-TTS (Doğal Türkçe sinirsel ses; Microsoft Edge altyapısı, ücretsiz)
         tmp = _temp_audio(".mp3", prefix="dragon_tts_")
         try:
-            asyncio.run(self._save_tts(text, tmp))
+            if on_status is not None:
+                on_status("Ses sentezleniyor…")
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self._save_tts(text, tmp))
+            finally:
+                loop.close()
+
+            if tmp.exists() and tmp.stat().st_size > 0:
+                return tmp
         except Exception:
             try:
                 tmp.unlink(missing_ok=True)
             except OSError:
                 pass
-            return None
-        return tmp
+
+        # 3. SAPI5 (Windows yerleşik ses motoru - Çevrimdışı son çare)
+        try:
+            if on_status is not None:
+                on_status("SAPI5 sesi oluşturuluyor…")
+            tmp = _temp_audio(".wav", prefix="dragon_sapi5_")
+            if self._sapi5_synthesize(text, tmp):
+                return tmp
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        return None
 
     def _sapi5_synthesize(self, text: str, path: Path) -> bool:
-        """Windows SAPI5 ile çevrimdışı ses sentezi yapar.
-        Başarılıysa True döner. Diğer projeden (Yeni Proje xx) uyarlanmıştır.
-        """
+        """Windows SAPI5 ile çevrimdışı ses sentezi yapar."""
         try:
             import win32com.client
         except ImportError:
@@ -292,33 +376,63 @@ class VoiceEngine:
     async def _save_tts(self, text: str, path: Path) -> None:
         from edge_tts import Communicate  # yalnızca kullanımda içe aktar
 
-        communicate = Communicate(
-            text, voice=self.tts_voice, rate=self.tts_rate, pitch=self.tts_pitch
-        )
-        await communicate.save(str(path))
+        voice = self.tts_voice or "tr-TR-EmelNeural"
+        rate = self.tts_rate or "+0%"
+        pitch = self.tts_pitch or "+0Hz"
+
+        # -15Hz / -8% gibi sunucu tarafından reddedilen veya robotik yapan aşırı pes tonları düzelt
+        if pitch in ("-15Hz", "-10Hz", "-5Hz"):
+            pitch = "+0Hz"
+        if rate in ("-8%", "-5%"):
+            rate = "+0%"
+
+        try:
+            communicate = Communicate(
+                text, voice=voice, rate=rate, pitch=pitch
+            )
+            await communicate.save(str(path))
+            if path.exists() and path.stat().st_size > 0:
+                return
+        except Exception:
+            # Seçili ses (örn. AhmetNeural) sunucu hatası verirse güvenilir doğal ses Emel'e düş
+            if voice != "tr-TR-EmelNeural":
+                communicate = Communicate(
+                    text, voice="tr-TR-EmelNeural", rate="+0%", pitch="+0Hz"
+                )
+                await communicate.save(str(path))
+                if path.exists() and path.stat().st_size > 0:
+                    return
+            raise
 
     def _play_audio(self, path: Path) -> None:
         """WAV/mp3'ü pygame ile çalar; pygame yoksa winmm/mci'ye düşer."""
+        # 1. Pygame dene
         try:
             import pygame
 
-            pygame.mixer.init()
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(frequency=24000, buffer=512)
             pygame.mixer.music.load(str(path))
             pygame.mixer.music.play()
             while pygame.mixer.music.get_busy():
-                threading.Event().wait(0.1)
-            pygame.mixer.quit()
+                threading.Event().wait(0.04)
+            pygame.mixer.music.stop()
+            try:
+                pygame.mixer.music.unload()
+            except Exception:
+                pass
             return
         except Exception:
             pass
 
-        try:  # Windows mci (winmm) geri düşüşü
+        # 2. Windows MCI (winmm) geri düşüşü
+        try:
             import ctypes
 
             mci = ctypes.windll.winmm
-            escaped = str(path).replace("\\", "/")
+            escaped = str(path.resolve()).replace("\\", "/")
             media_type = "waveaudio" if path.suffix.lower() == ".wav" else "mpegvideo"
-            alias = "dragon_tts"
+            alias = f"drg_{uuid.uuid4().hex[:6]}"
             if mci.mciSendStringW(f'open "{escaped}" type {media_type} alias {alias}', None, 0, None) == 0:
                 mci.mciSendStringW(f"play {alias} wait", None, 0, None)
                 mci.mciSendStringW(f"close {alias}", None, 0, None)
@@ -326,7 +440,7 @@ class VoiceEngine:
         except Exception:
             pass
 
-        raise VoiceError("Ses oynatılamadı (pygame yüklü değil).")
+        raise VoiceError("Ses oynatılamadı. Ses sürücüsü veya oynatıcı bulunamadı.")
 
 
 def _temp_audio(suffix: str, prefix: str = "dragon_") -> Path:

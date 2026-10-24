@@ -12,10 +12,20 @@ venv/
 data/
 !data/.gitkeep
 
-# PyInstaller
+# PyInstaller & Windows
 build/
 dist/
 *.spec
+*.lnk
+*.tmp
+
+# Ses çıktıları / geçici dosyalar
+*.wav
+*.mp3
+
+# Test & Önbellek
+.pytest_cache/
+tests/__pycache__/
 
 # Editör
 .vscode/

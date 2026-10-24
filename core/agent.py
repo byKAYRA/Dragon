@@ -6,8 +6,12 @@ import mimetypes
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from google import genai
-from google.genai import types
+try:
+    from google import genai
+    from google.genai import types
+except ImportError:
+    genai = None  # type: ignore
+    types = None  # type: ignore
 
 from config import settings as app_settings
 from core.prompts import SYSTEM_PROMPT
@@ -40,6 +44,11 @@ class DragonAgent:
         self.api_key = (user_settings.get("api_key") or "").strip()
         self.model = user_settings.get("model") or app_settings.DEFAULT_MODEL
         self.assistant_name = user_settings.get("assistant_name") or app_settings.APP_NAME
+
+        if genai is None or types is None:
+            raise AgentError(
+                "google-genai paketi kurulu değil. Kurulum için: pip install google-genai"
+            )
 
         if not self.api_key:
             raise AgentError(
@@ -234,6 +243,7 @@ class DragonAgent:
 def _tool_event_label(name: str) -> str:
     labels = {
         "web_search": "Web'de aranıyor…",
+        "get_trending_topics": "Gündem ve trendler alınıyor…",
         "read_file": "Dosya okunuyor…",
         "write_file": "Dosya yazılıyor…",
         "list_files": "Klasör listeleniyor…",

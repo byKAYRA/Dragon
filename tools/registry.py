@@ -9,9 +9,25 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable
 
-from google.genai import types
+try:
+    from google.genai import types
+except ImportError:
+    types = None  # type: ignore
 
-from tools import file_tools, system_tools, web_search
+from tools import file_tools, system_tools, web_search, x_trends
+
+
+def _format_trends(limit: int = 8) -> str:
+    """X trendlerini model için okunabilir metne dönüştürür."""
+    topics = x_trends.get_trending_topics(limit=limit)
+    if not topics:
+        return "Şu anda Türkiye X (Twitter) trend verileri alınamadı."
+    lines = ["Türkiye X (Twitter) Gündem Trendleri:"]
+    for item in topics:
+        count = f" ({item['count_text']})" if item.get("count_text") else ""
+        lines.append(f"{item['rank']}. {item['tag']}{count}")
+    return "\n".join(lines)
+
 
 # ---------------------------------------------------------------------------
 # Araç tanımları
@@ -41,6 +57,25 @@ TOOL_SPECS: list[dict[str, Any]] = [
             "required": ["query"],
         },
         "function": web_search.web_search,
+    },
+    {
+        "name": "get_trending_topics",
+        "description": (
+            "Türkiye'de X (Twitter) üzerinde anlık en çok konuşulan trend "
+            "başlıklarını (gündemi) döndürür. Kullanıcı 'gündemde ne var', "
+            "'trendler neler' dediğinde kullan."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Döndürülecek trend sayısı (1-10, varsayılan 8).",
+                }
+            },
+            "required": [],
+        },
+        "function": lambda limit=8: _format_trends(limit),
     },
     {
         "name": "read_file",
@@ -212,8 +247,11 @@ def _enabled_specs(
 
 def build_gemini_tool(
     *, web_search_enabled: bool = True, file_tools_enabled: bool = True
-) -> types.Tool | None:
+) -> Any | None:
     """Etkin araçlardan modele verilecek `types.Tool` nesnesini üretir."""
+    if types is None:
+        return None
+
     specs = _enabled_specs(
         web_search_enabled=web_search_enabled,
         file_tools_enabled=file_tools_enabled,
@@ -251,6 +289,7 @@ def describe_call(name: str, args: dict[str, Any] | None) -> str:
         "open_application": "Uygulama açılacak: {app_name}",
         "open_website": "Site açılacak: {url}",
         "get_weather": "Hava durumu sorgulanacak: {city}",
+        "get_trending_topics": "X (Twitter) trendleri sorgulanacak",
         "set_volume": "Ses seviyesi değiştirilecek: %{level}",
         "web_search": "Web araması yapılacak: {query}",
     }

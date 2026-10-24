@@ -262,7 +262,7 @@ class SettingsDialog(ctk.CTkToplevel):
 
         self.rate_label = ctk.CTkLabel(
             inner,
-            text=f"Konuşma hızı: {float(self.current.get('tts_speaking_rate', 0.92)):.2f} (JARVIS: 0.92)",
+            text=f"Konuşma hızı: {float(self.current.get('tts_speaking_rate', app_settings.DEFAULT_TTS_SPEAKING_RATE)):.2f}",
             text_color=self.palette["muted"],
             anchor="w",
         )
@@ -275,12 +275,12 @@ class SettingsDialog(ctk.CTkToplevel):
             command=self._on_rate,
             progress_color=self.palette["accent"],
         )
-        self.rate_slider.set(float(self.current.get("tts_speaking_rate", 0.92)))
+        self.rate_slider.set(float(self.current.get("tts_speaking_rate", app_settings.DEFAULT_TTS_SPEAKING_RATE)))
         self.rate_slider.pack(fill="x", pady=(4, 10))
 
         self.pitch_label = ctk.CTkLabel(
             inner,
-            text=f"Ses perdesi (peslik): {float(self.current.get('google_tts_pitch', -3.0)):.1f} (JARVIS: -3.0)",
+            text=f"Ses perdesi: {float(self.current.get('google_tts_pitch', app_settings.DEFAULT_GOOGLE_TTS_PITCH)):.1f}",
             text_color=self.palette["muted"],
             anchor="w",
         )
@@ -293,11 +293,11 @@ class SettingsDialog(ctk.CTkToplevel):
             command=self._on_pitch,
             progress_color=self.palette["accent"],
         )
-        self.pitch_slider.set(float(self.current.get("google_tts_pitch", -3.0)))
+        self.pitch_slider.set(float(self.current.get("google_tts_pitch", app_settings.DEFAULT_GOOGLE_TTS_PITCH)))
         self.pitch_slider.pack(fill="x", pady=(4, 4))
         ctk.CTkLabel(
             inner,
-            text="Perde ne kadar negatifse ses o kadar pes/tok olur.",
+            text="0.0 doğal perdedir. Negatif değerler sesi kalınlaştırır.",
             text_color=self.palette["muted"],
             anchor="w",
             justify="left",
@@ -306,7 +306,7 @@ class SettingsDialog(ctk.CTkToplevel):
         ).pack(fill="x", pady=(0, 10))
 
         ctk.CTkLabel(
-            inner, text="Yedek ses (Edge)", text_color=self.palette["muted"], anchor="w"
+            inner, text="Ses seçimi (Edge)", text_color=self.palette["muted"], anchor="w"
         ).pack(fill="x")
         current_voice = self.current.get("tts_voice", app_settings.DEFAULT_TTS_VOICE)
         # Etiket listesinde arama; yoksa ilk (kalın erkek) ses.
@@ -406,12 +406,10 @@ class SettingsDialog(ctk.CTkToplevel):
         self.temp_label.configure(text=f"Yaratıcılık (temperature): {value:.1f}")
 
     def _on_rate(self, value: float) -> None:
-        self.rate_label.configure(text=f"Konuşma hızı: {value:.2f} (JARVIS: 0.92)")
+        self.rate_label.configure(text=f"Konuşma hızı: {value:.2f}")
 
     def _on_pitch(self, value: float) -> None:
-        self.pitch_label.configure(
-            text=f"Ses perdesi (peslik): {value:.1f} (JARVIS: -3.0)"
-        )
+        self.pitch_label.configure(text=f"Ses perdesi: {value:.1f}")
 
     def _open_google_console(self) -> None:
         import webbrowser

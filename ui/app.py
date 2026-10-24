@@ -5,6 +5,7 @@ Tarife göre düz (flat), koyu siyah zemin + neon mavi çerçeveler:
     * Sol üstte Hava Durumu paneli
     * Sol altta GÜNDEM paneli
     * Ortada ses dalgası görselleştirmesi (tıklayınca dinler, yanıtı sesli okur)
+    * Alt ortada metin komut çubuğu (klavyeyle komut/soru gönderme)
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from ui.theme import FONT_FAMILY, get_palette
 
 TITLE_TEXT = "D R A G O N"
 SUBTITLE_TEXT = "DRAGON KERNEL v1.0"
-WINDOW_SIZE = "1180x780"
+WINDOW_SIZE = "1180x800"
 
 WEATHER = {
     "city": "İstanbul, TR",
@@ -86,7 +87,7 @@ class VoiceVisualizer(ctk.CTkFrame):
         master,
         *,
         palette: dict[str, str],
-        size: int = 420,
+        size: int = 390,
         on_click: Any = None,
     ) -> None:
         super().__init__(master, fg_color="transparent")
@@ -133,7 +134,7 @@ class VoiceVisualizer(ctk.CTkFrame):
         canvas = self.canvas
         canvas.delete("all")
         cx = cy = self.size / 2
-        radius = min(self.size / 2 - 20, 200)
+        radius = min(self.size / 2 - 20, 185)
         palette = self.palette
 
         if self.mode == self.MODE_LISTENING:
@@ -330,9 +331,13 @@ class DragonApp(ctk.CTk):
 
         self.title(f"{app_settings.APP_NAME} — {app_settings.APP_TAGLINE}")
         self.geometry(WINDOW_SIZE)
-        self.minsize(900, 620)
+        self.minsize(920, 640)
         self.configure(fg_color=self.palette["window"])
         self._set_window_icon()
+        self.lift()
+        self.attributes("-topmost", True)
+        self.after(300, lambda: self.attributes("-topmost", False))
+        self.focus_force()
 
         self.voice = VoiceEngine(
             tts_backend=self.settings.get(
@@ -363,7 +368,7 @@ class DragonApp(ctk.CTk):
         self._wake_word_enabled = False
 
         self._build_layout()
-        self._set_status("Hazır — çembere tıklayarak konuşun.")
+        self._set_status("Hazır — çembere tıklayarak konuşun veya komut yazın.")
         self._update_status_bar()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -535,28 +540,83 @@ class DragonApp(ctk.CTk):
         self.visualizer = VoiceVisualizer(
             center,
             palette=self.palette,
-            size=420,
+            size=380,
             on_click=self._toggle_voice,
         )
-        self.visualizer.pack(expand=True, pady=(10, 6))
+        self.visualizer.pack(expand=True, pady=(6, 2))
 
         self.center_hint = ctk.CTkLabel(
             center,
-            text="Konuşmak için çembere tıklayın",
+            text="Konuşmak için çembere tıklayın veya komut yazın",
             font=ctk.CTkFont(family=FONT_FAMILY, size=13),
             text_color=self.palette["muted"],
         )
-        self.center_hint.pack(pady=(0, 18))
+        self.center_hint.pack(pady=(0, 6))
 
         self.voice_feedback = ctk.CTkLabel(
             center,
             text="",
             font=ctk.CTkFont(family=FONT_FAMILY, size=13),
             text_color=self.palette["text"],
-            wraplength=520,
+            wraplength=540,
             justify="center",
         )
-        self.voice_feedback.pack(pady=(0, 26))
+        self.voice_feedback.pack(pady=(0, 12))
+
+        # Metin Komut Girişi (Chat Input Bar)
+        input_frame = ctk.CTkFrame(
+            center,
+            fg_color=self.palette["surface"],
+            corner_radius=22,
+            border_width=1,
+            border_color=self.palette["border"],
+            height=46,
+        )
+        input_frame.pack(fill="x", padx=40, pady=(0, 16))
+        input_frame.pack_propagate(False)
+
+        self.text_input = ctk.CTkEntry(
+            input_frame,
+            placeholder_text="Dragon'a yazın... (Örn: 'Bugün hava nasıl?', 'Spotify'ı aç')",
+            placeholder_text_color=self.palette["muted"],
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13),
+            fg_color="transparent",
+            text_color=self.palette["text"],
+            border_width=0,
+        )
+        self.text_input.pack(side="left", fill="both", expand=True, padx=(16, 8))
+        self.text_input.bind("<Return>", lambda _event: self._send_text_command())
+
+        self.send_btn = ctk.CTkButton(
+            input_frame,
+            text="➤",
+            width=36,
+            height=32,
+            corner_radius=16,
+            fg_color=self.palette["accent"],
+            hover_color=self.palette["accent_hover"],
+            text_color="#ffffff",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            command=self._send_text_command,
+        )
+        self.send_btn.pack(side="right", padx=(0, 8), pady=7)
+
+    def _send_text_command(self) -> None:
+        """Metin kutusuna girilen komutu Dragon ajanına iletir."""
+        if self._busy:
+            return
+        text = self.text_input.get().strip()
+        if not text:
+            return
+        if not (self.settings.get("api_key") or "").strip():
+            self._open_settings()
+            return
+
+        self.text_input.delete(0, tk.END)
+        self._events.put(("heard", text))
+        threading.Thread(
+            target=self._process_command, args=(text,), daemon=True
+        ).start()
 
     # ==================================================================
     # Wake-word (sürekli dinleme) - diğer projeden uyarlanmış
@@ -618,15 +678,22 @@ class DragonApp(ctk.CTk):
             )
             self._events.put(("answer", answer))
             self._events.put(("speaking",))
+
+            # Konuşurken mikrofon yankısını engellemek için wake-word'ü sessize al
+            if self._wake_word is not None:
+                self._wake_word.muted = True
+
             self.voice.speak_async(
                 answer,
                 on_done=lambda: self._events.put(("speak_done",)),
-                on_error=lambda e: self._events.put(("tool", f"Ses hatası: {e}")),
+                on_error=lambda e: self._events.put(("speak_error", str(e))),
                 on_status=lambda msg: self._events.put(("tool", msg)),
             )
         except (AgentError, Exception) as exc:
             self._events.put(("error", str(exc)))
             self._busy = False
+            if self._wake_word is not None:
+                self._wake_word.muted = False
             self.visualizer.set_mode(VoiceVisualizer.MODE_IDLE)
 
     # ==================================================================
@@ -668,10 +735,14 @@ class DragonApp(ctk.CTk):
             events.put(("answer", answer))
             events.put(("speaking",))
 
+            # Konuşurken mikrofon yankısını önlemek için wake-word'ü sessize al
+            if self._wake_word is not None:
+                self._wake_word.muted = True
+
             self.voice.speak_async(
                 answer,
                 on_done=lambda: events.put(("speak_done",)),
-                on_error=lambda e: events.put(("tool", f"Ses hatası: {e}")),
+                on_error=lambda e: events.put(("speak_error", str(e))),
                 on_status=lambda msg: events.put(("tool", msg)),
             )
         except VoiceError as exc:
@@ -687,12 +758,16 @@ class DragonApp(ctk.CTk):
                 kind, *rest = self._events.get_nowait()
                 value = rest[0] if rest else None
                 if kind == "heard":
-                    self.voice_feedback.configure(text=f"✨ Anladım: {value}")
+                    self.voice_feedback.configure(text=f"✨ {value}")
                     self._set_status("Yanıt hazırlanıyor…")
                 elif kind == "tool":
                     self._set_status(str(value))
                 elif kind == "answer":
-                    self._set_status(f"Yanıt: {value}")
+                    preview = str(value)
+                    if len(preview) > 280:
+                        preview = preview[:277] + "…"
+                    self.voice_feedback.configure(text=f"💬 {preview}")
+                    self._set_status("Dragon yanıtlıyor…")
                 elif kind == "speaking":
                     self.visualizer.set_mode(VoiceVisualizer.MODE_SPEAKING)
                     self.center_hint.configure(text="Dragon konuşuyor")
@@ -708,9 +783,12 @@ class DragonApp(ctk.CTk):
                     )
                     dialog.wait_window()
                     reply.put(dialog.approved)
-                    self.center_hint.configure(text="Konuşmak için çembere tıklayın")
+                    self.center_hint.configure(text="Konuşmak için çembere tıklayın veya komut yazın")
                 elif kind == "speak_done":
                     self._finish_voice()
+                elif kind == "speak_error":
+                    self._finish_voice()
+                    self._set_status(f"⚠️ Seslendirme uyarısı: {value}")
                 elif kind == "error":
                     self._finish_voice(started=False)
                     self.voice_feedback.configure(text="")
@@ -721,8 +799,10 @@ class DragonApp(ctk.CTk):
 
     def _finish_voice(self, *, started: bool = True) -> None:
         self._busy = False
+        if self._wake_word is not None:
+            self._wake_word.muted = False
         self.visualizer.set_mode(VoiceVisualizer.MODE_IDLE)
-        self.center_hint.configure(text="Konuşmak için çembere tıklayın")
+        self.center_hint.configure(text="Konuşmak için çembere tıklayın veya komut yazın")
         if started:
             self._set_status("Hazır")
 
@@ -790,14 +870,7 @@ class DragonApp(ctk.CTk):
         self._update_status_bar()
 
     def _first_run(self) -> None:
-        from tkinter import messagebox
-
-        messagebox.showinfo(
-            "Dragon'a hoş geldiniz",
-            "Başlamak için Ayarlar penceresinden Google AI Studio API "
-            "anahtarınızı girin.\n\nAnahtarı ücretsiz olarak "
-            "aistudio.google.com üzerinden alabilirsiniz.",
-        )
+        self._set_status("Dragon'a hoş geldiniz! Lütfen Ayarlar penceresinden API anahtarınızı girin.")
         self._open_settings()
 
     # ==================================================================

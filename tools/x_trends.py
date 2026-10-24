@@ -11,7 +11,10 @@ import time
 import urllib.parse
 from typing import Any
 
-import requests
+try:
+    import requests
+except ImportError:
+    requests = None  # type: ignore
 
 
 REQUEST_TIMEOUT = 12
@@ -118,10 +121,17 @@ def get_trending_topics(limit: int = 8, force: bool = False) -> list[dict[str, A
 
     url = f"https://trends24.in/{slug}/"
     try:
-        response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        response.encoding = "utf-8"
-        parsed = _parse(response.text, limit)
+        if requests is not None:
+            response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            response.encoding = "utf-8"
+            html = response.text
+        else:
+            import urllib.request
+            req = urllib.request.Request(url, headers=HEADERS)
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+                html = resp.read().decode("utf-8", errors="replace")
+        parsed = _parse(html, limit)
     except Exception:
         with _lock:
             hit = _CACHE.get(slug)
