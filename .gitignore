@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Ortam / gizli bilgiler
+.env
+
+# Yerel veriler (ayarlar, sohbetler, medya, çalışma klasörü)
+data/
+!data/.gitkeep
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Editör
+.vscode/
+.idea/
